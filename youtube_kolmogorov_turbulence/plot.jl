@@ -1,3 +1,8 @@
+# MIT License
+# Original work © 2021 Felix Köhler
+# Reproduced by Santhosh S under the terms of the MIT License
+# See LICENSE file in this folder for full license text.
+
 using FFTW
 using Plots
 using LinearAlgebra

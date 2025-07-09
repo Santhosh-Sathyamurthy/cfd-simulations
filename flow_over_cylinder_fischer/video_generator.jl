@@ -1,3 +1,7 @@
+# MIT License
+# Copyright (c) 2025 Santhosh S
+# See LICENSE file for full license text.
+
 using Printf
 
 # Simple video generation parameters
