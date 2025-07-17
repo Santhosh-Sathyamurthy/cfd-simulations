@@ -20,7 +20,7 @@ using SharedArrays
 
 # Add processes for parallelization
 if nprocs() == 1
-    addprocs(min(4, Sys.CPU_THREADS ÷ 2))  # Use half the available cores
+    addprocs(min(8, Sys.CPU_THREADS - 4))  # Use 8 workers
 end
 
 @everywhere using Gridap
@@ -32,18 +32,18 @@ const R_cylinder = L/2
 const V_inf = 1.0
 const cylinder_center = (3*L, 0.0)  # Closer to inlet for efficiency
 
-# More efficient time stepping
-const T_TOTAL = 10  # Reduced total time
+
+const T_TOTAL = 20.0  # Reduced total time
 const DT = 0.05      # Larger time step for efficiency
 const N_STEPS = Int(T_TOTAL / DT)
-const SAVE_INTERVAL = 1  # Save every 5 steps
+const SAVE_INTERVAL = 1  # Save every step
 
-# Coarser but more efficient mesh
-const H_FAR = 0.25
-const H_NEAR = 0.04
+# Increasing the Stiffness Matrix Size
+const H_FAR = 0.2
+const H_NEAR = 0.02
 
-# Reduced Reynolds numbers for faster testing
-const RE_VALUES = [0.1, 1.0, 10.0, 40.0]
+# Convection-dominated Flow
+const RE_VALUES = [100]
 
 # Create output directories
 function setup_output_directories()
@@ -275,8 +275,8 @@ end
 function create_efficient_visualization(uh, ph, Re, step, output_dir)
     try
         # Smaller, more efficient grid
-        x_range = range(-0.5*L, 7*L, length=100)
-        y_range = range(-1.5*L, 1.5*L, length=60)
+        x_range = range(-0.5*L, 7*L, length=300)
+        y_range = range(-1.5*L, 1.5*L, length=200)
         
         # Split x_range for parallel processing
         n_chunks = min(nprocs(), 4)

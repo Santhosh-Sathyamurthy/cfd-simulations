@@ -237,7 +237,7 @@ function compute_vorticity(uh)
 end
 
 # Simulation parameters - start with smaller Re for stability
-Re_values = [0.1, 1.0, 10.0]  # Start with very low Re for stability
+Re_values = [40.0]  # Start with very low Re for stability
 T = 2.0  # Shorter simulation time for testing
 dt = 0.05  # Larger time step for faster testing
 n_steps = Int(T / dt)

@@ -13,8 +13,8 @@ cx = 3.0;
 cy = 0.0;
 
 // Mesh sizes
-h_far = 0.25;
-h_near = 0.04;
+h_far = 0.2;
+h_near = 0.02;
 
 // Domain corners
 Point(1) = {x_min, y_min, 0, h_far};
@@ -57,5 +57,5 @@ Physical Surface("domain") = {1};
 
 // Efficient mesh settings
 Mesh.Algorithm = 6;
-Mesh.CharacteristicLengthMin = 0.04;
-Mesh.CharacteristicLengthMax = 0.25;
+Mesh.CharacteristicLengthMin = 0.02;
+Mesh.CharacteristicLengthMax = 0.2;

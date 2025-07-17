@@ -7,7 +7,7 @@ using Printf
 # Simple video generation parameters
 const BASE_DIR = "cylinder_flow_output"
 const VIDEO_DIR = "cylinder_flow_videos"
-const RE_VALUES = [0.1, 1.0, 10.0, 40.0]
+const RE_VALUES = [100]
 const FRAMERATE = 10  # fps
 const GIF_FRAMERATE = 10  
 
