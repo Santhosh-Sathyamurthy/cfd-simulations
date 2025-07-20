@@ -1,16 +1,15 @@
 from pathlib import Path
 
 # === Configuration ===
-Re_value = 100
-base_path = Path(f"/home/santhosh/projects/julia/julia-cfd-simulations/julia/flow_over_cylinder_fischer/v2/cylinder_flow_output/Re_{str(Re_value)}")
-keep_every = 20  # Keep one frame every 20 (e.g., 0, 20, 40, ..., 200)
+base_path = Path("/home/santhosh/projects/julia/julia-cfd-simulations/julia/youtube_kolmogorov_turbulence/kolmogorov_icefire/")
+keep_every = 50  # Keep one frame every 20 (e.g., 0, 20, 40, ..., 200)
 
 # === Collect files ===
 to_delete = []
 to_keep = []
 deleted_frames = []
 
-for prefix in ["velocity", "vorticity"]:
+for prefix in ["velocity", "vorticity", "kolmogorov"]:
     for file in sorted(base_path.glob(f"{prefix}_*.png")):
         try:
             frame = int(file.stem.split("_")[-1])
