@@ -6,8 +6,8 @@ from PIL import Image
 import os
 
 # Configuration
-output_dir = "turbulent_cylinder_results_re_80"  # Directory containing PNG frames
-output_file = "vorticity_re_80.mp4"     # Output animation file
+output_dir = "v3_karman_vortex_results"  # Directory containing PNG frames
+output_file = "velocity_re_100.mp4"     # Output animation file
 dpi = 150                                      # Resolution of output
 fps = 10                                       # Frames per second for animation
 
@@ -18,7 +18,7 @@ def main():
 
     # Get list of frame files
     frame_path = Path(output_dir)
-    frame_files = sorted(frame_path.glob("vorticity_frame_*.png"))  # Sort by filename
+    frame_files = sorted(frame_path.glob("velocity_frame_*.png"))  # Sort by filename
     if not frame_files:
         raise FileNotFoundError(f"No frames found in {output_dir}")
 
