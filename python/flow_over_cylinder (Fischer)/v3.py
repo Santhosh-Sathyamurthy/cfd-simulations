@@ -25,29 +25,29 @@ class OptimizedTurbulentConfig:
     x_max: float = 20.0
     y_min: float = 0.0
     y_max: float = 4.0
-    nx: int = 480  # Increased for better vortex resolution
+    nx: int = 480
     ny: int = 144
     T_total: float = 30.0
-    dt_base: float = 0.00025
-    cfl_target: float = 0.15
+    dt_base: float = 0.00005
+    cfl_target: float = 0.1
     adaptive_dt: bool = True
     dt_min: float = 1e-6
-    dt_max: float = 0.0005
-    Re: float = 100.0
-    use_les: bool = True
-    smagorinsky_constant: float = 0.1  # Reduced to minimize damping
-    use_supg: bool = True
-    artificial_viscosity: float = 0.01  # Reduced to match physical viscosity
-    pressure_iterations: int = 300
-    pressure_tolerance: float = 1e-7
-    max_velocity: float = 3.0
-    initial_steps: int = 100
+    dt_max: float = 0.0001
+    Re: float = 200.0  # Increased for clearer vortex shedding
+    use_les: bool = False
+    smagorinsky_constant: float = 0.0
+    use_supg: bool = True  # Enabled for stability
+    artificial_viscosity: float = 0.001  # Small artificial viscosity
+    pressure_iterations: int = 1500
+    pressure_tolerance: float = 1e-8
+    max_velocity: float = 5.0
+    initial_steps: int = 1000
     parallel_threads: int = 4
     use_fast_pressure: bool = True
     memory_efficient: bool = True
     vectorized_ops: bool = True
-    save_interval: int = 200
-    output_dir: str = "v3_karman_vortex_results_2"
+    save_interval: int = 100  # More frequent saves for animation
+    output_dir: str = "v3_karman_vortex_results_4"
     dpi: int = 200
 
     def __post_init__(self):
@@ -103,8 +103,8 @@ def compute_convection_fast(u, v, phi, dx, dy):
 def compute_convection_supg_fast(u, v, phi, dx, dy, tau_supg):
     ny, nx = phi.shape
     conv = np.zeros_like(phi)
-    dx_inv = 1.0 / dx
-    dy_inv = 1.0 / dy
+    dx_inv = 0.5 / dx
+    dy_inv = 0.5 / dy
     for i in prange(1, ny-1):
         for j in prange(1, nx-1):
             u_vel = u[i, j]
@@ -212,7 +212,7 @@ def apply_ibm_fast(u, v, ibm_mask, force_strength):
     return u, v
 
 @njit(parallel=True, fastmath=True, cache=True)
-def clean_divergence_fast(u, v, dx, dy, iterations=5):  # Reduced iterations
+def clean_divergence_fast(u, v, dx, dy, iterations=2):  # Enabled with 2 iterations
     ny, nx = u.shape
     phi = np.zeros_like(u)
     dx2 = dx * dx
@@ -225,7 +225,7 @@ def clean_divergence_fast(u, v, dx, dy, iterations=5):  # Reduced iterations
         for i in prange(1, ny-1):
             for j in prange(1, nx-1):
                 phi[i, j] = (dx2_inv * (phi[i, j+1] + phi[i, j-1]) +
-                            dy2_inv * (phi[i+1, j] + phi[i-1, j]) - div[i, j]) * denom_inv
+                             dy2_inv * (phi[i+1, j] + phi[i-1, j]) - div[i, j]) * denom_inv
         grad_x, grad_y = compute_gradient_fast(phi, dx, dy)
         u[1:-1, 1:-1] -= grad_x[1:-1, 1:-1]
         v[1:-1, 1:-1] -= grad_y[1:-1, 1:-1]
@@ -238,6 +238,7 @@ class OptimizedTurbulentSolver:
         self.setup_boundary_masks()
         self.initialize_fields()
         self.step = 0
+        self.energy_history = []
         
     def setup_grid(self):
         cfg = self.config
@@ -253,7 +254,7 @@ class OptimizedTurbulentSolver:
         sigma = 2 * cfg.dx
         self.ibm_mask = np.exp(-((self.dist - cfg.R_cylinder) / sigma)**2)
         self.ibm_mask = np.where(self.dist < cfg.R_cylinder, 1.0, 
-                                np.where(self.dist < cfg.R_cylinder + 5*cfg.dx, self.ibm_mask, 0.0))
+                                 np.where(self.dist < cfg.R_cylinder + 5*cfg.dx, self.ibm_mask, 0.0))
         
     def initialize_fields(self):
         cfg = self.config
@@ -290,6 +291,8 @@ class OptimizedTurbulentSolver:
         if not self.config.adaptive_dt:
             return self.config.dt_base
         cfg = self.config
+        if self.step < 1000:
+            return 0.00002  # Smaller initial time step
         vel_max = max(np.max(np.abs(self.u)), np.max(np.abs(self.v)), 1e-10)
         dt_cfl = cfg.cfl_target * min(cfg.dx, cfg.dy) / vel_max
         nu_total = cfg.nu + np.mean(self.nu_t) + cfg.artificial_viscosity
@@ -319,8 +322,8 @@ class OptimizedTurbulentSolver:
         
     def apply_boundary_conditions(self, u, v):
         cfg = self.config
-        pert_scale = min(1.0, (self.step - cfg.initial_steps) / cfg.initial_steps) if self.step > cfg.initial_steps else 0.0
-        perturbation = 0.005 * pert_scale * np.sin(2 * np.pi * self.y / cfg.y_max + 0.02 * self.step)
+        pert_scale = min(1.0, self.step / 1000.0) * 0.005  # Reduced perturbation
+        perturbation = pert_scale * np.sin(2 * np.pi * self.y / cfg.y_max + 0.02 * self.step)
         u[:, 0] = cfg.V_inf * (1 + perturbation)
         v[:, 0] = 0
         u[:, -1] = u[:, -2]
@@ -330,16 +333,21 @@ class OptimizedTurbulentSolver:
         v[0, :] = 0
         v[-1, :] = 0
         
+    def compute_energy(self):
+        return 0.5 * (self.u**2 + self.v**2)
+        
     def time_step(self):
         cfg = self.config
         dt = self.adaptive_time_step()
         u_old = self.u.copy()
         v_old = self.v.copy()
-        
+        nu_eff = cfg.nu + self.config.artificial_viscosity
         if cfg.use_les:
             self.nu_t = compute_smagorinsky_viscosity_fast(
                 u_old, v_old, cfg.dx, cfg.dy, cfg.smagorinsky_constant
             )
+        else:
+            self.nu_t.fill(0.0)
         
         nu_eff = cfg.nu + self.nu_t + cfg.artificial_viscosity
         if cfg.use_supg:
@@ -372,7 +380,7 @@ class OptimizedTurbulentSolver:
         self.u[:] = self.u_star - dt * dpdx
         self.v[:] = self.v_star - dt * dpdy
         
-        self.u, self.v = clean_divergence_fast(self.u, self.v, cfg.dx, cfg.dy, iterations=5)
+        self.u, self.v = clean_divergence_fast(self.u, self.v, cfg.dx, cfg.dy, iterations=2)
         
         post_div = compute_divergence_fast(self.u, self.v, cfg.dx, cfg.dy)
         print(f"Step {self.step}: Post-pressure divergence = {np.max(np.abs(post_div)):.3f}")
@@ -383,6 +391,11 @@ class OptimizedTurbulentSolver:
         vorticity = self.compute_vorticity()
         vort_max = np.nanmax(np.abs(vorticity))
         print(f"Step {self.step}: Max vorticity = {vort_max:.3f}")
+        
+        energy = self.compute_energy()
+        energy_mean = np.nanmean(energy)
+        self.energy_history.append((self.step, energy_mean))
+        print(f"Step {self.step}: Mean kinetic energy = {energy_mean:.3f}")
         
         np.clip(self.u, -cfg.max_velocity, cfg.max_velocity, out=self.u)
         np.clip(self.v, -cfg.max_velocity, cfg.max_velocity, out=self.v)
@@ -416,19 +429,16 @@ class OptimizedVisualizer:
             levels = np.linspace(0, np.nanmax(vel_mag)*0.9, 31)
             cf = ax.contourf(solver.X, solver.Y, vel_mag, levels=levels, cmap='viridis')
             plt.colorbar(cf, ax=ax, label='Dimensionless Velocity Magnitude |V|')
-            try:
-                skip = max(6, min(solver.X.shape) // 30)  # Denser streamlines
-                seed_points = np.array([
-                    [cfg.x_min + 1, y] for y in np.linspace(cfg.y_min + 0.3, cfg.y_max - 0.3, 16)
-                ])
-                ax.streamplot(solver.X, solver.Y, solver.u, solver.v, 
-                              color='white', linewidth=0.8, density=2.0,
-                              start_points=seed_points, maxlength=50)
-                ax.quiver(solver.X[::skip, ::skip], solver.Y[::skip, ::skip], 
-                          solver.u[::skip, ::skip], solver.v[::skip, ::skip], 
-                          color='lightgray', scale=20, alpha=0.5)
-            except:
-                pass
+            skip = max(6, min(solver.X.shape) // 30)
+            seed_points = np.array([
+                [cfg.x_min + 1, y] for y in np.linspace(cfg.y_min + 0.3, cfg.y_max - 0.3, 16)
+            ])
+            ax.streamplot(solver.X, solver.Y, solver.u, solver.v, 
+                          color='white', linewidth=0.8, density=2.0,
+                          start_points=seed_points, maxlength=50)
+            ax.quiver(solver.X[::skip, ::skip], solver.Y[::skip, ::skip], 
+                      solver.u[::skip, ::skip], solver.v[::skip, ::skip], 
+                      color='lightgray', scale=20, alpha=0.5)
             cyl = patches.Circle(cfg.cylinder_center, cfg.R_cylinder,
                                  facecolor='black', edgecolor='gold', linewidth=1.5)
             ax.add_patch(cyl)
@@ -459,8 +469,8 @@ class OptimizedVisualizer:
             fig = plt.figure(figsize=(12, 6), facecolor='white')
             ax = fig.add_subplot(111)
             vorticity = solver.compute_vorticity()
-            vort_max = np.nanmax(np.abs(vorticity))
-            levels = np.linspace(-vort_max*0.9, vort_max*0.9, 51)  # Adjusted for sensitivity
+            vort_max = min(np.nanmax(np.abs(vorticity)), 10.0)  # Adjusted for better visibility
+            levels = np.linspace(-vort_max, vort_max, 51)
             cf = ax.contourf(solver.X, solver.Y, vorticity, levels=levels, cmap='RdBu', extend='both')
             plt.colorbar(cf, ax=ax, label='Dimensionless Vorticity ω')
             cyl = patches.Circle(cfg.cylinder_center, cfg.R_cylinder,
@@ -471,7 +481,7 @@ class OptimizedVisualizer:
             ax.set_aspect('equal')
             ax.set_xlabel('x/L')
             ax.set_ylabel('y/L')
-            ax.set_title(f'Vorticity Field, Re={cfg.Re:.0f}, t={current_time:.2f}')
+            ax.set_title(f'Vorticity Field (Kármán Vortex Street), Re={cfg.Re:.0f}, t={current_time:.2f}')
             ax.grid(True, alpha=0.3)
             fig.text(0.02, 0.02, f'Vorticity Range: ±{vort_max:.2f}', fontsize=8)
             plt.tight_layout()
@@ -482,6 +492,28 @@ class OptimizedVisualizer:
                 gc.collect()
         except Exception as e:
             print(f"Error plotting vorticity frame {step}: {e}")
+            plt.close('all')
+            
+    def plot_energy_history(self, solver: OptimizedTurbulentSolver):
+        cfg = self.config
+        try:
+            steps, energies = zip(*solver.energy_history)
+            fig = plt.figure(figsize=(10, 6), facecolor='white')
+            ax = fig.add_subplot(111)
+            ax.plot(steps, energies, label='Mean Kinetic Energy (0.5 * |V|^2)')
+            ax.set_xlabel('Step')
+            ax.set_ylabel('Mean Kinetic Energy')
+            ax.set_title(f'Kinetic Energy History, Re={cfg.Re:.0f}')
+            ax.grid(True, alpha=0.3)
+            ax.legend()
+            plt.tight_layout()
+            filename = self.output_path / "energy_history.png"
+            plt.savefig(filename, dpi=cfg.dpi, bbox_inches='tight')
+            plt.close(fig)
+            if cfg.memory_efficient:
+                gc.collect()
+        except Exception as e:
+            print(f"Error plotting energy history: {e}")
             plt.close('all')
             
     def cleanup(self):
@@ -497,7 +529,7 @@ def monitor_simulation_health(solver, step):
         print(f"WARNING: High velocity {vel_max:.3f} at step {step}")
         return False
     div_max = np.max(np.abs(compute_divergence_fast(solver.u, solver.v, cfg.dx, cfg.dy)))
-    div_threshold = 20.0 if step <= cfg.initial_steps else 5.0
+    div_threshold = 20.0 if step <= 1000 else 2.0  # Adjusted thresholds
     if div_max > div_threshold:
         print(f"WARNING: High divergence {div_max:.3f} at step {step}")
         return False
@@ -505,11 +537,11 @@ def monitor_simulation_health(solver, step):
 
 def main():
     config = OptimizedTurbulentConfig(
-        Re=100.0,
+        Re=200.0,
         nx=480,
         ny=144,
         T_total=30.0,
-        use_les=True,
+        use_les=False,
         use_supg=True,
         use_fast_pressure=True,
         adaptive_dt=True,
@@ -517,7 +549,7 @@ def main():
     )
     
     print("🚀 Initializing Ultra-High-Performance Turbulent CFD Solver...")
-    print(f"Target: >15 steps/second with full turbulence modeling\n")
+    print(f"Target: >15 steps/second with laminar flow modeling for Kármán Vortex Street\n")
     
     solver = OptimizedTurbulentSolver(config)
     visualizer = OptimizedVisualizer(config)
@@ -529,8 +561,9 @@ def main():
     try:
         print("🏁 Starting optimized simulation...")
         while current_time < config.T_total:
+            dt = solver.adaptive_time_step()
             solver.time_step()
-            current_time += config.dt
+            current_time += dt
             
             if step % 20 == 0:
                 if not monitor_simulation_health(solver, step):
@@ -538,9 +571,9 @@ def main():
                     break
                 wall_time = time.time() - start_time
                 steps_per_sec = step / wall_time if wall_time > 0 else 0
-                eta = (config.T_total - current_time) / config.dt / steps_per_sec if steps_per_sec > 0 else 0
+                eta = (config.T_total - current_time) / dt / steps_per_sec if steps_per_sec > 0 else 0
                 progress = (current_time / config.T_total) * 100
-                print(f"Step: {step:6d} | Time: {current_time:6.2f} | dt: {config.dt:.2e} | "
+                print(f"Step: {step:6d} | Time: {current_time:6.2f} | dt: {dt:.2e} | "
                       f"Progress: {progress:.1f}% | Speed: {steps_per_sec:.1f} steps/s | ETA: {eta/60:.1f} min")
             
             if step % config.save_interval == 0:
@@ -561,6 +594,7 @@ def main():
         traceback.print_exc()
     
     finally:
+        visualizer.plot_energy_history(solver)
         end_time = time.time()
         total_time = end_time - start_time
         final_speed = step / total_time if total_time > 0 else 0

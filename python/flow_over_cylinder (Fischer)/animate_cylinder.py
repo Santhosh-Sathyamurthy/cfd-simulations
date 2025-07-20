@@ -6,10 +6,12 @@ from PIL import Image
 import os
 
 # Configuration
-output_dir = "v3_karman_vortex_results"  # Directory containing PNG frames
-output_file = "velocity_re_100.mp4"     # Output animation file
-dpi = 150                                      # Resolution of output
-fps = 10                                       # Frames per second for animation
+output_dir = "v3_karman_vortex_results_4"
+Re_value = 200
+plot_type = "vorticity"
+output_file = f"outputs/{plot_type}_re_{str(Re_value)}.mp4"
+dpi = 150
+fps = 10
 
 def main():
     # Set up figure
@@ -18,7 +20,7 @@ def main():
 
     # Get list of frame files
     frame_path = Path(output_dir)
-    frame_files = sorted(frame_path.glob("velocity_frame_*.png"))  # Sort by filename
+    frame_files = sorted(frame_path.glob(f"{plot_type}_frame_*.png"))  # Sort by filename
     if not frame_files:
         raise FileNotFoundError(f"No frames found in {output_dir}")
 
