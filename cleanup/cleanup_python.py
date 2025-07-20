@@ -2,10 +2,10 @@ from pathlib import Path
 import re
 
 # === CONFIGURATION ===
-base_path = Path("/home/santhosh/projects/julia/julia-cfd-simulations/python/flow_over_cylinder (Fischer)/v3_re_200")
+base_path = Path("/home/santhosh/projects/julia/julia-cfd-simulations/python/flow_over_cylinder (Fischer)/v4_re_400")
 duration_s = 30.0                # Total simulation time in seconds
 fps_to_keep = 1                  # How many frames per second to retain
-prefixes = ["velocity", "vorticity", "turbulent_frame"]
+prefixes = ["velocity_frame", "vorticity_frame", "turbulent_frame"]
 
 # === Main Logic Per Prefix ===
 total_deleted = 0
@@ -35,27 +35,33 @@ for prefix in prefixes:
     max_frame = frame_numbers[-1]
     total_pngs = len(frame_files)
 
-    # Estimate dt and keep stride
-    total_iters = max_frame - min_frame
-    estimated_dt = duration_s / (max_frame - min_frame + 1)
-    seconds_per_png = duration_s / total_pngs
-    frames_per_second = 1 / seconds_per_png
-    keep_every = max(1, round(frames_per_second / fps_to_keep))
+    # Calculate time step based on the number of PNGs and duration
+    estimated_dt = duration_s / total_pngs  # Time per PNG
+    frames_per_second = 1 / estimated_dt    # Original FPS
+    target_frames = int(duration_s * fps_to_keep)  # Total frames to keep
+    keep_every = max(1, total_pngs // target_frames) if target_frames > 0 else total_pngs
 
-    # Select frames to keep/delete
+    # Select frames to keep at even intervals
     to_keep = []
     to_delete = []
 
+    # Calculate ideal frame indices to keep
+    ideal_indices = [round(i * total_pngs / target_frames) for i in range(target_frames)]
+    ideal_frames = [frame_numbers[min(idx, total_pngs - 1)] for idx in ideal_indices]
+
     for frame, file in frame_files:
-        if (frame - min_frame) % keep_every == 0:
+        # Keep the frame if it's close to an ideal frame number
+        closest_ideal = min(ideal_frames, key=lambda x: abs(x - frame))
+        if frame == closest_ideal and file not in to_keep:
             to_keep.append(file)
         else:
             to_delete.append(file)
 
     print(f"📈 Total PNGs: {total_pngs}")
-    print(f"🧮 Frame stride (est): {(max_frame - min_frame) / total_pngs:.1f}")
+    print(f"🧮 Frame range: {min_frame} to {max_frame}")
     print(f"⏱️ Estimated dt: {estimated_dt:.6f} s/iteration")
-    print(f"🎯 Keeping {fps_to_keep} frame(s)/s => keep every {keep_every} PNGs")
+    print(f"🎞️ Original FPS: {frames_per_second:.2f}")
+    print(f"🎯 Target FPS: {fps_to_keep}, keeping every ~{keep_every:.1f} frames")
     print(f"✅ To keep: {len(to_keep)}")
     print(f"🗑️ To delete: {len(to_delete)}")
 
@@ -63,12 +69,16 @@ for prefix in prefixes:
     confirm = input(f"\n❓ Proceed with deleting {len(to_delete)} {prefix} PNGs? (yes/no): ").strip().lower()
     if confirm == "yes":
         for f in to_delete:
-            f.unlink()
-        print(f"✅ Deleted {len(to_delete)}")
+            try:
+                f.unlink()
+                print(f"🗑️ Deleted: {f}")
+            except Exception as e:
+                print(f"⚠️ Error deleting {f}: {e}")
+        print(f"✅ Deleted {len(to_delete)} files for {prefix}")
         total_deleted += len(to_delete)
         total_kept += len(to_keep)
     else:
-        print("⚠️ Skipping deletion.")
+        print("⚠️ Skipping deletion for this prefix.")
 
 # === Summary ===
 print(f"\n=== ✅ DONE ===")
