@@ -2,10 +2,12 @@ from pathlib import Path
 import re
 
 # === CONFIGURATION ===
-base_path = Path("/home/santhosh/projects/julia/julia-cfd-simulations/python/flow_over_cylinder (Fischer)/v4_re_400")
+ver = 5
+Re_value = 600
+base_path = Path(f"/home/santhosh/projects/julia/julia-cfd-simulations/python/flow_over_cylinder (Fischer)/v{str(ver)}_re_{str(Re_value)}/velocity_frames")
 duration_s = 30.0                # Total simulation time in seconds
 fps_to_keep = 1                  # How many frames per second to retain
-prefixes = ["velocity_frame", "vorticity_frame", "turbulent_frame"]
+prefixes = ["velocity_frame", "vorticity_frame"]
 
 # === Main Logic Per Prefix ===
 total_deleted = 0

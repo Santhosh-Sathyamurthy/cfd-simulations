@@ -1,0 +1,3 @@
+# ignoring pycache and h5 files from now as it is becoming too much overload
+__pycache__/
+*.h5

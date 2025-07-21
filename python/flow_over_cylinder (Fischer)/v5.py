@@ -11,23 +11,24 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor
 import gc
 import h5py
-from tqdm import tqdm
 import logging
+from tqdm import tqdm
 
-# Set matplotlib backend for compatibility
+# Set matplotlib backend and style
 plt.switch_backend('Agg')
+plt.style.use('dark_background')
 warnings.filterwarnings('ignore')
 
-# Configure logging (file-only for routine messages)
+# Configure logging
+os.makedirs('logs', exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('logs/v4_re_600.log')
+        logging.FileHandler('logs/v5_re_600.log')
     ]
 )
 logger = logging.getLogger(__name__)
-# Console handler for critical messages only
 console = logging.StreamHandler()
 console.setLevel(logging.WARNING)
 console.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
@@ -65,21 +66,22 @@ class OptimizedTurbulentConfig:
     memory_efficient: bool = True
     vectorized_ops: bool = True
     save_interval: int = 200
-    output_dir: str = "v4_re_600"
+    output_dir: str = "v5_re_600"
     hdf5_file: str = f"{output_dir}.h5"
     dpi: int = 200
 
     def __post_init__(self):
         self.dx = (self.x_max - self.x_min) / (self.nx - 1)
         self.dy = (self.y_max - self.y_min) / (self.ny - 1)
-        self.nu = 1.0 / self.Re
-        self.dt = self.dt_base
+        self.nu = np.float32(1.0 / self.Re)
+        self.dt = np.float32(self.dt_base)
+        self.artificial_viscosity = np.float32(self.artificial_viscosity)
         self.parallel_threads = min(self.parallel_threads, os.cpu_count())
-        memory_mb = (self.nx * self.ny * 8 * 6) / (1024 * 1024)
+        memory_mb = (self.nx * self.ny * 4 * 6) / (1024 * 1024)
         available_mb = psutil.virtual_memory().available / (1024 * 1024)
         logger.info("--- Optimized Turbulent Flow Configuration ---")
         logger.info(f"Reynolds Number: {self.Re}")
-        logger.info(f"Grid: {self.nx}x{self.ny} (optimized for vectorization)")
+        logger.info(f"Grid: {self.nx}x{self.ny}")
         logger.info(f"Grid spacing: dx={self.dx:.4f}, dy={self.dy:.4f}")
         logger.info(f"Parallel threads: {self.parallel_threads}")
         logger.info(f"Estimated Memory: {memory_mb:.1f} MB")
@@ -259,13 +261,13 @@ class OptimizedTurbulentSolver:
         self.step = 0
         self.energy_history = []
         self.times = []
-        
+
     def setup_grid(self):
         cfg = self.config
         self.x = np.linspace(cfg.x_min, cfg.x_max, cfg.nx)
         self.y = np.linspace(cfg.y_min, cfg.y_max, cfg.ny)
         self.X, self.Y = np.meshgrid(self.x, self.y, indexing='xy')
-        
+
     def setup_boundary_masks(self):
         cfg = self.config
         x_c, y_c = cfg.cylinder_center
@@ -273,9 +275,9 @@ class OptimizedTurbulentSolver:
         self.cylinder_mask = self.dist <= cfg.R_cylinder
         sigma = 2 * cfg.dx
         self.ibm_mask = np.exp(-((self.dist - cfg.R_cylinder) / sigma)**2)
-        self.ibm_mask = np.where(self.dist < cfg.R_cylinder, 1.0, 
+        self.ibm_mask = np.where(self.dist < cfg.R_cylinder, 1.0,
                                  np.where(self.dist < cfg.R_cylinder + 5*cfg.dx, self.ibm_mask, 0.0))
-        
+
     def initialize_fields(self):
         cfg = self.config
         dtype = np.float32 if cfg.memory_efficient else np.float64
@@ -289,7 +291,7 @@ class OptimizedTurbulentSolver:
         self.div_u_star = np.zeros_like(self.u)
         self.phi = np.zeros_like(self.u)
         self.initialize_potential_flow()
-        
+
     def initialize_potential_flow(self):
         cfg = self.config
         x_c, y_c = cfg.cylinder_center
@@ -306,19 +308,19 @@ class OptimizedTurbulentSolver:
                     blend = min(1.0, ((r - cfg.R_cylinder) / (4 * cfg.dx))**2)
                     self.u[i, j] = cfg.V_inf * blend * (1 - mask_val)
                     self.v[i, j] = 0.0
-        
+
     def adaptive_time_step(self):
         if not self.config.adaptive_dt:
             return self.config.dt_base
         cfg = self.config
         if self.step < 1000:
-            return 0.00002
+            return np.float32(0.00002)
         vel_max = max(np.max(np.abs(self.u)), np.max(np.abs(self.v)), 1e-10)
         dt_cfl = cfg.cfl_target * min(cfg.dx, cfg.dy) / vel_max
         nu_total = cfg.nu + np.mean(self.nu_t) + cfg.artificial_viscosity
         dt_visc = 0.4 * min(cfg.dx, cfg.dy)**2 / nu_total
-        return float(np.clip(min(dt_cfl, dt_visc), cfg.dt_min, cfg.dt_max))
-        
+        return np.float32(np.clip(min(dt_cfl, dt_visc), cfg.dt_min, cfg.dt_max))
+
     def solve_pressure_fast(self, div_u_star):
         cfg = self.config
         if cfg.use_fast_pressure:
@@ -339,7 +341,7 @@ class OptimizedTurbulentSolver:
                 phi_new[self.cylinder_mask] = 0
                 self.phi = phi_new
         return self.phi
-        
+
     def apply_boundary_conditions(self, u, v):
         cfg = self.config
         pert_scale = min(1.0, self.step / 1000.0) * 0.01
@@ -352,10 +354,10 @@ class OptimizedTurbulentSolver:
         u[-1, :] = 0
         v[0, :] = 0
         v[-1, :] = 0
-        
+
     def compute_energy(self):
         return 0.5 * (self.u**2 + self.v**2)
-        
+
     def compute_vorticity(self):
         cfg = self.config
         vorticity = np.zeros_like(self.u)
@@ -365,7 +367,7 @@ class OptimizedTurbulentSolver:
         )
         vorticity[self.cylinder_mask] = np.nan
         return vorticity
-        
+
     def time_step(self):
         cfg = self.config
         dt = self.adaptive_time_step()
@@ -378,7 +380,7 @@ class OptimizedTurbulentSolver:
             )
         else:
             self.nu_t.fill(0.0)
-        
+
         nu_eff = cfg.nu + self.nu_t + cfg.artificial_viscosity
         if cfg.use_supg:
             self.tau_supg = compute_supg_stabilization_fast(
@@ -389,48 +391,48 @@ class OptimizedTurbulentSolver:
         else:
             conv_u = compute_convection_fast(u_old, v_old, u_old, cfg.dx, cfg.dy)
             conv_v = compute_convection_fast(u_old, v_old, v_old, cfg.dx, cfg.dy)
-        
+
         lap_u = compute_laplacian_fast(u_old, cfg.dx, cfg.dy, nu_eff)
         lap_v = compute_laplacian_fast(v_old, cfg.dx, cfg.dy, nu_eff)
-        
+
         self.u_star[:] = u_old + dt * (-conv_u + lap_u)
         self.v_star[:] = v_old + dt * (-conv_v + lap_v)
-        
+
         self.apply_boundary_conditions(self.u_star, self.v_star)
         force_strength = min(1.0, self.step / cfg.initial_steps)
         self.u_star, self.v_star = apply_ibm_fast(self.u_star, self.v_star, self.ibm_mask, force_strength)
-        
+
         self.div_u_star = compute_divergence_fast(self.u_star, self.v_star, cfg.dx, cfg.dy)
         logger.info(f"Step {self.step}: Pre-pressure divergence = {np.max(np.abs(self.div_u_star)):.3f}")
         self.phi = self.solve_pressure_fast(self.div_u_star)
-        
+
         dpdx, dpdy = compute_gradient_fast(self.phi, cfg.dx, cfg.dy)
         grad_mag = np.sqrt(dpdx**2 + dpdy**2)
         logger.info(f"Step {self.step}: Max pressure gradient = {np.max(np.abs(grad_mag)):.3f}")
         self.u[:] = self.u_star - dt * dpdx
         self.v[:] = self.v_star - dt * dpdy
-        
+
         self.u, self.v = clean_divergence_fast(self.u, self.v, cfg.dx, cfg.dy, iterations=2)
-        
+
         post_div = compute_divergence_fast(self.u, self.v, cfg.dx, cfg.dy)
         logger.info(f"Step {self.step}: Post-pressure divergence = {np.max(np.abs(post_div)):.3f}")
-        
+
         self.apply_boundary_conditions(self.u, self.v)
         self.u, self.v = apply_ibm_fast(self.u, self.v, self.ibm_mask, force_strength)
-        
+
         vorticity = self.compute_vorticity()
         vort_max = np.nanmax(np.abs(vorticity))
         logger.info(f"Step {self.step}: Max vorticity = {vort_max:.3f}")
-        
+
         energy = self.compute_energy()
         energy_mean = np.nanmean(energy)
         self.energy_history.append((self.step, energy_mean))
         self.times.append(self.step * dt)
         logger.info(f"Step {self.step}: Mean kinetic energy = {energy_mean:.3f}")
-        
+
         np.clip(self.u, -cfg.max_velocity, cfg.max_velocity, out=self.u)
         np.clip(self.v, -cfg.max_velocity, cfg.max_velocity, out=self.v)
-        
+
         self.step += 1
         return dt
 
@@ -439,9 +441,12 @@ class OptimizedVisualizer:
         self.config = config
         self.output_path = Path(config.output_dir)
         self.output_path.mkdir(exist_ok=True)
+        self.velocity_path = self.output_path / "velocity_frames"
+        self.vorticity_path = self.output_path / "vorticity_frames"
+        self.velocity_path.mkdir(exist_ok=True)
+        self.vorticity_path.mkdir(exist_ok=True)
         self.executor = ThreadPoolExecutor(max_workers=2)
-        plt.style.use('seaborn-v0_8')
-        
+
     def save_data_to_hdf5(self, solver: OptimizedTurbulentSolver, step: int, current_time: float):
         cfg = self.config
         try:
@@ -453,17 +458,21 @@ class OptimizedVisualizer:
                     group.create_dataset('u', data=solver.u, compression='gzip', compression_opts=4)
                     group.create_dataset('v', data=solver.v, compression='gzip', compression_opts=4)
                     group.create_dataset('vorticity', data=solver.compute_vorticity(),
-                                      compression='gzip', compression_opts=4)
+                                        compression='gzip', compression_opts=4)
                     group.create_dataset('X', data=solver.X, compression='gzip', compression_opts=4)
                     group.create_dataset('Y', data=solver.Y, compression='gzip', compression_opts=4)
                 logger.info(f"Saved data for step {step} to HDF5")
         except Exception as e:
             logger.error(f"Error saving HDF5 data for step {step}: {e}")
-        
+
     def generate_frames_from_hdf5(self):
         cfg = self.config
         output_path = self.output_path
-        with h5py.File(output_path / cfg.hdf5_file, 'r') as f:
+        hdf5_path = output_path / cfg.hdf5_file
+        if not hdf5_path.exists():
+            logger.warning(f"HDF5 file {hdf5_path} does not exist. Skipping frame generation.")
+            return
+        with h5py.File(hdf5_path, 'r') as f:
             steps = sorted([k for k in f.keys() if k.startswith('step_')],
                           key=lambda x: int(x.split('_')[1]))
             for step_key in tqdm(steps, desc="Generating Frames", unit="frame"):
@@ -475,26 +484,25 @@ class OptimizedVisualizer:
                 X = group['X'][:]
                 Y = group['Y'][:]
                 current_time = group.attrs['time']
-                
                 try:
-                    fig = plt.figure(figsize=(12, 6), facecolor='white')
+                    fig = plt.figure(figsize=(12, 6))
                     ax = fig.add_subplot(111)
                     vel_mag = np.sqrt(u**2 + v**2)
                     levels = np.linspace(0, np.nanmax(vel_mag)*0.9, 31)
                     cf = ax.contourf(X, Y, vel_mag, levels=levels, cmap='viridis')
-                    plt.colorbar(cf, ax=ax, label='Dimensionless Velocity Magnitude |V|')
-                    skip = max(6, min(X.shape) // 30)
+                    plt.colorbar(cf, ax=ax, label='Velocity Magnitude |V|', shrink=0.8)
+                    skip = max(15, min(X.shape) // 15)
                     seed_points = np.array([
-                        [cfg.x_min + 1, y] for y in np.linspace(cfg.y_min + 0.3, cfg.y_max - 0.3, 16)
+                        [cfg.x_min + 1, y] for y in np.linspace(cfg.y_min + 0.3, cfg.y_max - 0.3, 5)
                     ])
-                    ax.streamplot(X, Y, u, v, 
-                                color='white', linewidth=0.8, density=2.0,
-                                start_points=seed_points, maxlength=50)
-                    ax.quiver(X[::skip, ::skip], Y[::skip, ::skip], 
-                            u[::skip, ::skip], v[::skip, ::skip], 
-                            color='lightgray', scale=20, alpha=0.5)
+                    ax.streamplot(X, Y, u, v,
+                                  color='white', linewidth=0.6, density=0.8,
+                                  start_points=seed_points, maxlength=50)
+                    ax.quiver(X[::skip, ::skip], Y[::skip, ::skip],
+                              u[::skip, ::skip], v[::skip, ::skip],
+                              color='lightgray', scale=40, alpha=0.3)
                     cyl = patches.Circle(cfg.cylinder_center, cfg.R_cylinder,
-                                       facecolor='black', edgecolor='gold', linewidth=1.5)
+                                         facecolor='black', edgecolor='gold', linewidth=1.5)
                     ax.add_patch(cyl)
                     ax.set_xlim(cfg.x_min, cfg.x_max)
                     ax.set_ylim(cfg.y_min, cfg.y_max)
@@ -502,60 +510,73 @@ class OptimizedVisualizer:
                     ax.set_xlabel('x/L')
                     ax.set_ylabel('y/L')
                     ax.set_title(f'Velocity Field, Re={cfg.Re:.0f}, t={current_time:.2f}')
-                    ax.grid(True, alpha=0.3)
+                    ax.grid(True, alpha=0.2)
                     max_vel = np.nanmax(vel_mag)
                     mean_vel = np.nanmean(vel_mag)
-                    fig.text(0.02, 0.02, f'Max |V|: {max_vel:.3f} | Mean |V|: {mean_vel:.3f}', 
-                           fontsize=8)
+                    fig.text(0.02, 0.02, f'Max |V|: {max_vel:.3f} | Mean |V|: {mean_vel:.3f}',
+                             fontsize=8, color='white')
                     plt.tight_layout()
-                    filename = output_path / f"velocity_frame_{step:06d}.png"
+                    filename = self.velocity_path / f"velocity_frame_{step:06d}.png"
                     plt.savefig(filename, dpi=cfg.dpi, bbox_inches='tight')
                     plt.close(fig)
                 except Exception as e:
                     logger.error(f"Error plotting velocity frame {step}: {e}")
                     plt.close('all')
-                
                 try:
-                    fig = plt.figure(figsize=(12, 6), facecolor='white')
+                    fig = plt.figure(figsize=(12, 6))
                     ax = fig.add_subplot(111)
                     vort_max = min(np.nanmax(np.abs(vorticity)), 15.0)
                     levels = np.linspace(-vort_max, vort_max, 51)
-                    cf = ax.contourf(X, Y, vorticity, levels=levels, cmap='RdBu', extend='both')
-                    plt.colorbar(cf, ax=ax, label='Dimensionless Vorticity ω')
+                    cf = ax.contourf(X, Y, vorticity, levels=levels, cmap='inferno', extend='both')
+                    plt.colorbar(cf, ax=ax, label='Vorticity ω', shrink=0.8)
                     cyl = patches.Circle(cfg.cylinder_center, cfg.R_cylinder,
-                                       facecolor='black', edgecolor='gold', linewidth=1.5)
+                                         facecolor='black', edgecolor='gold', linewidth=1.5)
                     ax.add_patch(cyl)
                     ax.set_xlim(cfg.x_min, cfg.x_max)
                     ax.set_ylim(cfg.y_min, cfg.y_max)
                     ax.set_aspect('equal')
                     ax.set_xlabel('x/L')
                     ax.set_ylabel('y/L')
-                    ax.set_title(f'Vorticity Field (Kármán Vortex Street), Re={cfg.Re:.0f}, t={current_time:.2f}')
-                    ax.grid(True, alpha=0.3)
-                    fig.text(0.02, 0.02, f'Vorticity Range: ±{vort_max:.2f}', fontsize=8)
+                    ax.set_title(f'Vorticity Field, Re={cfg.Re:.0f}, t={current_time:.2f}')
+                    ax.grid(True, alpha=0.2)
+                    fig.text(0.02, 0.02, f'Vorticity Range: ±{vort_max:.2f}', fontsize=8, color='white')
                     plt.tight_layout()
-                    filename = output_path / f"vorticity_frame_{step:06d}.png"
+                    filename = self.vorticity_path / f"vorticity_frame_{step:06d}.png"
                     plt.savefig(filename, dpi=cfg.dpi, bbox_inches='tight')
                     plt.close(fig)
                 except Exception as e:
                     logger.error(f"Error plotting vorticity frame {step}: {e}")
                     plt.close('all')
-                
                 if cfg.memory_efficient:
                     gc.collect()
-        
+
     def plot_energy_history(self, solver: OptimizedTurbulentSolver):
         cfg = self.config
         try:
+            if not solver.energy_history:
+                logger.warning("No energy history data to plot.")
+                return
             steps, energies = zip(*solver.energy_history)
-            fig = plt.figure(figsize=(10, 6), facecolor='white')
-            ax = fig.add_subplot(111)
-            ax.semilogx(steps, energies, label='Mean Kinetic Energy (0.5 * |V|^2)')
-            ax.set_xlabel('Step')
-            ax.set_ylabel('Mean Kinetic Energy (log scale)')
-            ax.set_title(f'Kinetic Energy History, Re={cfg.Re:.0f}')
-            ax.grid(True, which='both', alpha=0.3)
-            ax.legend()
+            fig = plt.figure(figsize=(12, 6))
+            ax1 = fig.add_subplot(121)
+            ax1.semilogx(steps, energies, label='Mean Kinetic Energy (0.5 * |V|^2)', color='cyan')
+            ax1.set_xlabel('Steps (log scale)')
+            ax1.set_ylabel('Mean Kinetic Energy')
+            ax1.set_title(f'Kinetic Energy History, Re={cfg.Re:.0f}')
+            ax1.grid(True, which='both', alpha=0.3)
+            ax1.legend()
+
+            ax2 = fig.add_subplot(122)
+            interval = 200
+            energy_intervals = [np.mean([e for _, e in solver.energy_history[i:i+interval]])
+                              for i in range(0, len(solver.energy_history), interval)]
+            interval_steps = [s for s, _ in solver.energy_history[::interval]]
+            ax2.bar(interval_steps, energy_intervals, color='orange', alpha=0.7, width=interval*0.8)
+            ax2.set_xlabel('Steps')
+            ax2.set_ylabel('Mean Kinetic Energy (Averaged over 200 Steps)')
+            ax2.set_title('Energy Intervals')
+            ax2.grid(True, alpha=0.3)
+
             plt.tight_layout()
             filename = self.output_path / "energy_history.png"
             plt.savefig(filename, dpi=cfg.dpi, bbox_inches='tight')
@@ -566,7 +587,7 @@ class OptimizedVisualizer:
         except Exception as e:
             logger.error(f"Error plotting energy history: {e}")
             plt.close('all')
-            
+
     def cleanup(self):
         self.executor.shutdown(wait=False)
         logger.info("Visualizer cleanup completed")
@@ -593,61 +614,73 @@ def main():
         nx=600,
         ny=180,
         T_total=30.0,
+        dt_base=0.00005,
+        dt_max=0.0001,
+        cfl_target=0.1,
         use_les=False,
+        smagorinsky_constant=0.0,
         use_supg=True,
+        artificial_viscosity=0.001,
+        pressure_iterations=1500,
+        pressure_tolerance=1e-8,
+        save_interval=200,
         use_fast_pressure=True,
         adaptive_dt=True,
         memory_efficient=True
     )
-    
+
     logger.info("🚀 Initializing Ultra-High-Performance Turbulent CFD Solver...")
     logger.info("Target: >15 steps/second with laminar flow modeling for Kármán Vortex Street")
-    
+
     solver = OptimizedTurbulentSolver(config)
     visualizer = OptimizedVisualizer(config)
-    
+
     start_time = time.time()
     step = 0
     current_time = 0.0
-    
+
     try:
+        # Save initial state
+        logger.info(f"Saving initial data to HDF5 at t={current_time:.2f}...")
+        visualizer.save_data_to_hdf5(solver, step, current_time)
+
         with tqdm(total=config.T_total, desc="Simulation Progress", unit="time",
                   bar_format="{l_bar}{bar}| {n:.2f}/{total:.2f} [{elapsed}<{remaining}, {rate_fmt}]") as pbar:
             while current_time < config.T_total:
                 dt = solver.time_step()
                 current_time += dt
-                
+
                 if step % 20 == 0:
                     if not monitor_simulation_health(solver, step):
                         logger.error("Simulation became unstable. Stopping.")
                         break
-                
+
                 if step % config.save_interval == 0:
                     logger.info(f"Saving data to HDF5 at t={current_time:.2f}...")
                     visualizer.save_data_to_hdf5(solver, step, current_time)
                     if config.memory_efficient:
                         memory_usage = psutil.Process().memory_info().rss / (1024*1024)
                         logger.info(f"Memory usage: {memory_usage:.1f} MB")
-                
+
                 step += 1
-                pbar.update(float(dt))  # Convert dt to Python float for tqdm
-                
+                pbar.update(float(dt))
+
         logger.info("Generating visualization frames from HDF5 data...")
         visualizer.generate_frames_from_hdf5()
-            
+
     except KeyboardInterrupt:
         logger.warning("Simulation interrupted by user.")
     except Exception as e:
         logger.error(f"Simulation error: {e}")
         import traceback
         traceback.print_exc()
-    
+
     finally:
         visualizer.plot_energy_history(solver)
         end_time = time.time()
         total_time = end_time - start_time
         final_speed = step / total_time if total_time > 0 else 0
-        
+
         logger.warning("\n🏆 Simulation Performance Report:")
         logger.warning(f"Total steps: {step}")
         logger.warning(f"Final time: {current_time:.2f}")
@@ -655,7 +688,7 @@ def main():
         logger.warning(f"Average speed: {final_speed:.1f} steps/second")
         logger.warning(f"Results saved in: {visualizer.output_path}")
         logger.warning(f"Data saved in: {visualizer.output_path / config.hdf5_file}")
-        
+
         visualizer.cleanup()
         del solver, visualizer
         gc.collect()
