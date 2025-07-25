@@ -1,3 +1,7 @@
+# MIT License
+# Copyright (c) 2025 Santhosh S
+# See LICENSE file for full license text.
+
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from pathlib import Path
